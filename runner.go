@@ -119,7 +119,7 @@ func executeTools(ctx context.Context, calls []ToolCallPart, tools []Tool, emitt
 	parallelIdx := make([]bool, len(calls))
 
 	execOne := func(idx int, call ToolCallPart) {
-		emitter.delta(ToolExecDelta{CallID: call.CallID, Name: call.Name, Stage: ToolExecStart})
+		emitter.delta(ToolExecStartDelta{Call: call})
 		res := executeSingleTool(toolCtx, call, toolMap)
 		select {
 		case completions <- completion{idx: idx, res: res}:
@@ -146,7 +146,6 @@ func executeTools(ctx context.Context, calls []ToolCallPart, tools []Tool, emitt
 			}
 			msgs[idx] = msg
 			emitter.message(msg)
-			emitter.delta(ToolExecDelta{CallID: res.CallID, Name: res.Name, Stage: ToolExecEnd})
 			*next = *next + 1
 		}
 	}
@@ -223,7 +222,7 @@ func executeTools(ctx context.Context, calls []ToolCallPart, tools []Tool, emitt
 				recordCompletion(idx, interruptedToolResult(call))
 				continue
 			}
-			emitter.delta(ToolExecDelta{CallID: call.CallID, Name: call.Name, Stage: ToolExecStart})
+			emitter.delta(ToolExecStartDelta{Call: call})
 			res := executeSingleTool(toolCtx, call, toolMap)
 			recordCompletion(idx, res)
 			continue

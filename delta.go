@@ -42,21 +42,12 @@ type ToolCallDelta struct {
 
 func (ToolCallDelta) deltaKind() DeltaKind { return DeltaToolCall }
 
-type ToolExecStage string
-
-const (
-	ToolExecStart ToolExecStage = "start"
-	ToolExecEnd   ToolExecStage = "end"
-)
-
-// ToolExecDelta reports tool execution status.
-type ToolExecDelta struct {
-	CallID string
-	Name   string
-	Stage  ToolExecStage
+// ToolExecStartDelta signals tool execution start with the full call info.
+type ToolExecStartDelta struct {
+	Call ToolCallPart
 }
 
-func (ToolExecDelta) deltaKind() DeltaKind { return DeltaToolExec }
+func (ToolExecStartDelta) deltaKind() DeltaKind { return DeltaToolExec }
 
 // StepStatusDelta reports step-level status updates.
 type StepStatusDelta struct {

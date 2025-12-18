@@ -1,6 +1,7 @@
+package main
+
 // Bash Agent Demo - A simple ReAct agent that executes bash commands.
 // Requires OPENROUTER_API_KEY environment variable to be set.
-package main
 
 import (
 	"context"
@@ -8,9 +9,39 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/inspirepan/step"
 	"github.com/inspirepan/step/providers/openrouter"
+)
+
+var (
+	userStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("6")). // cyan
+			Bold(true)
+
+	assistantStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("5")) // magenta
+
+	thinkingStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("8")). // bright black (gray)
+			Italic(true)
+
+	toolCallStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("3")). // yellow
+			Bold(true)
+
+	toolOutputStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("4")) // blue
+
+	errorStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("1")). // red
+			Bold(true)
+
+	successStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("2")). // green
+			Bold(true)
 )
 
 type bashTool struct{}
@@ -67,65 +98,54 @@ func (b *bashTool) Execute(ctx context.Context, call step.ToolCallPart) (step.To
 	}, nil
 }
 
-
-
 func main() {
-	fmt.Fprintln(os.Stderr, "[DEBUG] main started")
 	userPrompt := "Please demonstrate a few harmless bash commands, such as checking the current directory, listing files, and showing the current date."
-	fmt.Printf("User: %s\n\n", userPrompt)
-
+	fmt.Println(userStyle.Render("User: ") + userPrompt + "\n")
 	ctx := context.Background()
-	fmt.Fprintln(os.Stderr, "[DEBUG] Creating provider...")
 	provider := openrouter.New("google/gemini-3-flash-preview", openrouter.WithReasoningEffort(openrouter.ReasoningEffortHigh))
-	fmt.Println("[DEBUG] Provider created")
-
-	tools := []step.Tool{&bashTool{}}
 	history := []step.Message{
 		step.UserMessage{Parts: []step.Part{step.TextPart{Text: userPrompt}}},
 	}
-
-	systemPrompt := "You're an agent running in user's shell with a bash tool. Be helpful and demonstrate commands step by step."
-
-	for {
-		fmt.Println("[DEBUG] Calling step.Step...")
-		result, err := step.Step(ctx, step.StepRequest{
-			Provider:     provider,
-			SystemPrompt: systemPrompt,
-			History:      history,
-			Tools:        tools,
-		})
-		if err != nil {
-			fmt.Printf("Error: %v\n", err)
-			return
-		}
-
-		// append step result to history
-		history = append(history, result...)
-
-		// print messages
-		for _, msg := range result {
-			switch m := msg.(type) {
-			case step.AssistantMessage:
-				for _, part := range m.Parts {
-					switch p := part.(type) {
-					case step.TextPart:
-						if p.Text != "" {
-							fmt.Printf("Assistant: %s\n", p.Text)
-						}
-					case step.ToolCallPart:
-						fmt.Printf("Calling tool: %s\n", p.Name)
-					}
-				}
-			case step.ToolResultMessage:
-				fmt.Printf("Tool output:\n%s\n", getToolResultText(m))
+	onDelta := func(delta step.MessageDelta) {
+		switch d := delta.(type) {
+		case step.TextDelta:
+			fmt.Print(assistantStyle.Render(d.Delta))
+		case step.ThinkingDelta:
+			fmt.Print(thinkingStyle.Render("\n"+strings.ReplaceAll(strings.TrimSpace(d.Delta), "\n\n", " ")) + "\n")
+		case step.ToolCallDelta:
+			if d.Name != "" {
+				fmt.Printf("\n%s %s %s\n", toolCallStyle.Render("Tool:"), d.Name, d.ArgsDelta)
 			}
-		}
-
-		if !result.HasToolCall() {
-			fmt.Println("Agent completed.")
-			return
+		case step.ToolExecStartDelta:
 		}
 	}
+	onMessage := func(msg step.Message) {
+		if m, ok := msg.(step.ToolResultMessage); ok {
+			if output := getToolResultText(m); output != "" {
+				fmt.Println(toolOutputStyle.Render(output))
+			}
+		}
+	}
+	for {
+		result, err := step.Step(ctx, step.StepRequest{
+			Provider:     provider,
+			SystemPrompt: "You're an agent running in user's shell with a bash tool. Be helpful and demonstrate commands step by step.",
+			History:      history,
+			Tools:        []step.Tool{&bashTool{}},
+		}, step.WithOnDelta(onDelta), step.WithOnMessage(onMessage))
+
+		if err != nil {
+			fmt.Println(errorStyle.Render("Error: " + err.Error()))
+			os.Exit(1)
+		}
+
+		history = append(history, result...)
+
+		if !result.HasToolCall() {
+			break
+		}
+	}
+	fmt.Println(successStyle.Render("\nAgent completed."))
 }
 
 func getToolResultText(msg step.ToolResultMessage) string {
