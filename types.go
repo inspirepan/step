@@ -44,23 +44,17 @@ func (p TextPart) MarshalJSON() ([]byte, error) {
 	}{PartText, alias(p)})
 }
 
-// ThinkingFormat describes the thinking content format.
-type ThinkingFormat string
-
-const (
-	ThinkingFormatAnthropic ThinkingFormat = "anthropic"
-	ThinkingFormatOpenAI    ThinkingFormat = "openai-responses"
-	ThinkingFormatOther     ThinkingFormat = "other"
-)
-
 // ThinkingPart represents model reasoning content.
 type ThinkingPart struct {
-	Thinking  string `json:"thinking"`
-	Signature string `json:"thinking_signature,omitempty"`
-
-	// ModelName identifies the source model for degradation during conversion
-	ModelName string         `json:"model_name,omitempty"`
-	Format    ThinkingFormat `json:"format,omitempty"`
+	ID string `json:"id,omitempty"`
+	// Thinking is the text content or summary
+	Thinking string `json:"thinking,omitempty"`
+	// Signature for Claude and Gemini or reasoning.encrypted_content for OpenAI
+	Signature string `json:"signature,omitempty"`
+	// Format for OpenRouter's reasoning_detail.format
+	Format string `json:"format,omitempty"`
+	// ModelName identifies the source model for cross-model degradation
+	ModelName string `json:"model_name,omitempty"`
 }
 
 func (ThinkingPart) partType() PartType { return PartThinking }

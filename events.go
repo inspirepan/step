@@ -22,9 +22,8 @@ const (
 
 // AssistantEvent is the streaming update emitted by providers.
 type AssistantEvent struct {
-	Type      AssistantEventType
-	PartIndex int
-	Delta     string
+	Type  AssistantEventType
+	Delta string
 
 	ToolCall *ToolCallPart
 
