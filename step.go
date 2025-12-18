@@ -53,6 +53,16 @@ func WithOnMessage(fn func(Message)) StepOption {
 // It is safe to append to the conversation history.
 type StepResult []Message
 
+// HasToolCall returns true if the step result contains tool calls.
+func (r StepResult) HasToolCall() bool {
+	for _, msg := range r {
+		if m, ok := msg.(AssistantMessage); ok && m.StopReason == StopToolUse {
+			return true
+		}
+	}
+	return false
+}
+
 // Step runs one step synchronously.
 func Step(ctx context.Context, req StepRequest, opts ...StepOption) (StepResult, error) {
 	var cfg stepConfig
