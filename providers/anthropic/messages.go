@@ -2,6 +2,7 @@ package anthropic
 
 import (
 	"context"
+	"errors"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
@@ -74,9 +75,9 @@ func WithThinking(budget int) Option {
 	}
 }
 
-// New creates a ChatProvider using Anthropic Messages API.
+// New creates a Provider using Anthropic Messages API.
 // It reads ANTHROPIC_API_KEY and ANTHROPIC_BASE_URL from environment if not explicitly set.
-func New(model string, opts ...Option) step.ChatProvider {
+func New(model string, opts ...Option) step.Provider {
 	cfg := Config{}
 	for _, opt := range opts {
 		opt(&cfg)
@@ -100,7 +101,8 @@ type provider struct {
 	client anthropic.Client
 }
 
-func (p *provider) GenerateStream(ctx context.Context, req step.GenerateRequest) (step.AssistantStream, error) {
-	// TODO: implement
-	panic("not implemented")
+func (p *provider) Stream(ctx context.Context, req step.ProviderRequest) (step.ProviderStream, error) {
+	_ = ctx
+	_ = req
+	return nil, errors.New("step/providers/anthropic: not implemented")
 }

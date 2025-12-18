@@ -8,7 +8,7 @@ import (
 
 // BuildMessages converts step request to OpenAI chat completion params.
 func BuildMessages(
-	req step.GenerateRequest,
+	req step.ProviderRequest,
 	reasoningHandler ReasoningHandler,
 	targetModel string,
 	useCacheControl bool,

@@ -62,9 +62,9 @@ func WithExtraBody(key string, value any) Option {
 	}
 }
 
-// New creates a ChatProvider using OpenAI Chat Completions API.
+// New creates a Provider using OpenAI Chat Completions API.
 // It reads OPENAI_API_KEY and OPENAI_BASE_URL from environment if not explicitly set.
-func New(model string, opts ...Option) step.ChatProvider {
+func New(model string, opts ...Option) step.Provider {
 	cfg := Config{}
 	for _, opt := range opts {
 		opt(&cfg)
@@ -94,7 +94,7 @@ type provider struct {
 	client openai.Client
 }
 
-func (p *provider) GenerateStream(ctx context.Context, req step.GenerateRequest) (step.AssistantStream, error) {
+func (p *provider) Stream(ctx context.Context, req step.ProviderRequest) (step.ProviderStream, error) {
 	reasoningHandler := NewDefaultReasoningHandler(p.model)
 	params := BuildMessages(req, reasoningHandler, p.model, false)
 	params.Model = p.model

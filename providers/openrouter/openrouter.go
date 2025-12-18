@@ -190,10 +190,10 @@ func WithProviderIgnore(providers ...string) Option {
 	}
 }
 
-// New creates a ChatProvider using OpenRouter API.
+// New creates a Provider using OpenRouter API.
 // It reads OPENROUTER_API_KEY from environment if not explicitly set.
 // BaseURL is fixed to https://openrouter.ai/api/v1.
-func New(model string, opts ...Option) step.ChatProvider {
+func New(model string, opts ...Option) step.Provider {
 	cfg := Config{}
 	for _, opt := range opts {
 		opt(&cfg)
@@ -277,7 +277,7 @@ type provider struct {
 	client openai.Client
 }
 
-func (p *provider) GenerateStream(ctx context.Context, req step.GenerateRequest) (step.AssistantStream, error) {
+func (p *provider) Stream(ctx context.Context, req step.ProviderRequest) (step.ProviderStream, error) {
 	handler := NewReasoningHandler(p.model)
 	// Enable cache_control for Claude and Gemini models via OpenRouter
 	useCacheControl := isClaudeModel(p.model) || isGeminiModel(p.model)

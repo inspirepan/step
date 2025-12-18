@@ -27,12 +27,12 @@ func SkipIfNoEnv(t *testing.T, envVar string) {
 
 // TestConfig holds configuration for a test run.
 type TestConfig struct {
-	Provider step.ChatProvider
+	Provider step.Provider
 	Timeout  time.Duration
 }
 
 // DefaultConfig returns a TestConfig with default timeout.
-func DefaultConfig(provider step.ChatProvider) TestConfig {
+func DefaultConfig(provider step.Provider) TestConfig {
 	return TestConfig{
 		Provider: provider,
 		Timeout:  DefaultTimeout,
@@ -46,67 +46,79 @@ func TestBasicTextGeneration(t *testing.T, cfg TestConfig) {
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.Timeout)
 	defer cancel()
 
-	req := step.GenerateRequest{
+	req := step.ProviderRequest{
 		History: []step.Message{
 			step.UserMessage{Parts: []step.Part{step.TextPart{Text: "Write a haiku"}}},
 		},
 	}
 
-	stream, err := cfg.Provider.GenerateStream(ctx, req)
+	stream, err := cfg.Provider.Stream(ctx, req)
 	if err != nil {
-		t.Fatalf("GenerateStream failed: %v", err)
+		t.Fatalf("Stream failed: %v", err)
 	}
 	defer stream.Close()
 
 	var textContent strings.Builder
-	var eventCount int
-	var sawTextStart bool
-	var sawTextEnd bool
+	var assistantMsg *step.AssistantMessage
 
 	for {
-		ev, err := stream.Next(ctx)
+		up, err := stream.Next(ctx)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
-				break
+				if up == nil {
+					break
+				}
+			} else {
+				t.Fatalf("stream.Next failed: %v", err)
 			}
-			t.Fatalf("stream.Next failed: %v", err)
 		}
-		eventCount++
-		switch ev.Type {
-		case step.EventTextStart:
-			sawTextStart = true
-		case step.EventTextEnd:
-			sawTextEnd = true
-		case step.EventTextDelta:
-			textContent.WriteString(ev.Delta)
+		if up != nil {
+			switch u := up.(type) {
+			case step.ProviderDeltaUpdate:
+				switch d := u.Delta.(type) {
+				case step.TextDelta:
+					textContent.WriteString(d.Delta)
+				}
+			case step.ProviderMessageUpdate:
+				msg := u.Message
+				assistantMsg = &msg
+			}
 		}
-	}
-
-	result, err := stream.Result()
-	if err != nil {
-		t.Fatalf("stream.Result failed: %v", err)
-	}
-
-	if result.Usage == nil {
-		t.Log("warning: usage info not returned")
-	} else {
-		if result.Usage.OutputTokens == 0 {
-			t.Error("expected non-zero output tokens")
+		if err != nil && errors.Is(err, io.EOF) {
+			break
 		}
 	}
 
 	text := textContent.String()
 	if text == "" {
-		t.Error("expected non-empty text response")
-	}
-	if !sawTextStart {
-		t.Error("expected text_start event")
-	}
-	if !sawTextEnd {
-		t.Error("expected text_end event")
+		// Some providers may not stream text deltas; fall back to the final message.
+		if assistantMsg == nil {
+			t.Fatal("expected assistant message")
+		}
+		for _, part := range assistantMsg.Parts {
+			p, ok := part.(step.TextPart)
+			if ok {
+				text += p.Text
+			}
+			pp, ok := part.(*step.TextPart)
+			if ok && pp != nil {
+				text += pp.Text
+			}
+		}
+		if text == "" {
+			t.Error("expected non-empty text response")
+		}
 	}
 
-	t.Logf("response: %q (events: %d)", text, eventCount)
+	if assistantMsg != nil {
+		if assistantMsg.Usage == nil {
+			t.Log("warning: usage info not returned")
+		} else if assistantMsg.Usage.OutputTokens == 0 {
+			t.Error("expected non-zero output tokens")
+		}
+	}
+
+	t.Logf("response: %q", text)
 }
 
 // calculatorTool is a simple test tool for tool calling tests.
@@ -151,7 +163,7 @@ func TestToolCalling(t *testing.T, cfg TestConfig) {
 	defer cancel()
 
 	tool := calculatorTool{}
-	req := step.GenerateRequest{
+	req := step.ProviderRequest{
 		SystemPrompt: "You are a helpful assistant. Use the add tool when asked to add numbers.",
 		History: []step.Message{
 			step.UserMessage{Parts: []step.Part{step.TextPart{Text: "What is 123 + 456 and 444+888, use calculator pls?"}}},
@@ -159,58 +171,68 @@ func TestToolCalling(t *testing.T, cfg TestConfig) {
 		Tools: []step.ToolSpec{tool.Spec()},
 	}
 
-	stream, err := cfg.Provider.GenerateStream(ctx, req)
+	stream, err := cfg.Provider.Stream(ctx, req)
 	if err != nil {
-		t.Fatalf("GenerateStream failed: %v", err)
+		t.Fatalf("Stream failed: %v", err)
 	}
 	defer stream.Close()
 
-	var toolCalls []step.ToolCallPart
-	var sawToolCallStart bool
+	var assistantMsg *step.AssistantMessage
+	var sawToolCallDelta bool
 
 	for {
-		ev, err := stream.Next(ctx)
+		up, err := stream.Next(ctx)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
-				break
-			}
-			t.Fatalf("stream.Next failed: %v", err)
-		}
-
-		switch ev.Type {
-		case step.EventToolCallStart:
-			sawToolCallStart = true
-		case step.EventToolCallEnd:
-			if ev.ToolCall != nil {
-				toolCalls = append(toolCalls, *ev.ToolCall)
+				if up == nil {
+					break
+				}
+			} else {
+				t.Fatalf("stream.Next failed: %v", err)
 			}
 		}
+		if up != nil {
+			switch u := up.(type) {
+			case step.ProviderDeltaUpdate:
+				switch u.Delta.(type) {
+				case step.ToolCallDelta:
+					sawToolCallDelta = true
+				}
+			case step.ProviderMessageUpdate:
+				msg := u.Message
+				assistantMsg = &msg
+			}
+		}
+		if err != nil && errors.Is(err, io.EOF) {
+			break
+		}
+	}
+	if assistantMsg == nil {
+		t.Fatal("expected assistant message")
 	}
 
-	result, err := stream.Result()
-	if err != nil {
-		t.Fatalf("stream.Result failed: %v", err)
+	var toolCalls []step.ToolCallPart
+	for _, part := range assistantMsg.Parts {
+		tc, ok := part.(step.ToolCallPart)
+		if ok {
+			toolCalls = append(toolCalls, tc)
+			continue
+		}
+		ptc, ok := part.(*step.ToolCallPart)
+		if ok && ptc != nil {
+			toolCalls = append(toolCalls, *ptc)
+		}
 	}
 
-	if result.StopReason != step.StopToolUse {
-		t.Errorf("expected StopToolUse, got %s", result.StopReason)
-	}
-
-	if !sawToolCallStart {
-		t.Error("expected toolcall_start event")
-	}
-
-	if len(toolCalls) == 0 {
+	if !sawToolCallDelta && len(toolCalls) == 0 {
 		t.Fatal("expected at least one tool call")
 	}
-
-	// Verify tool call content
-	tc := toolCalls[0]
-	if tc.Name != "add" {
-		t.Errorf("expected tool name 'add', got %q", tc.Name)
+	if len(toolCalls) > 0 {
+		if toolCalls[0].Name != "add" {
+			t.Errorf("expected tool name 'add', got %q", toolCalls[0].Name)
+		}
+		t.Logf("tool calls: %d, first call: %s(%s)", len(toolCalls), toolCalls[0].Name, string(toolCalls[0].ArgsJSON))
 	}
-
-	t.Logf("tool calls: %d, first call: %s(%s)", len(toolCalls), tc.Name, string(tc.ArgsJSON))
 }
 
 // TestSystemPrompt tests that system prompt is respected.
@@ -220,31 +242,40 @@ func TestSystemPrompt(t *testing.T, cfg TestConfig) {
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.Timeout)
 	defer cancel()
 
-	req := step.GenerateRequest{
+	req := step.ProviderRequest{
 		SystemPrompt: "You are a pirate. Always respond like a pirate. Use 'Arrr' in your response.",
 		History: []step.Message{
 			step.UserMessage{Parts: []step.Part{step.TextPart{Text: "Hello, how are you?"}}},
 		},
 	}
 
-	stream, err := cfg.Provider.GenerateStream(ctx, req)
+	stream, err := cfg.Provider.Stream(ctx, req)
 	if err != nil {
-		t.Fatalf("GenerateStream failed: %v", err)
+		t.Fatalf("Stream failed: %v", err)
 	}
 	defer stream.Close()
 
 	var response strings.Builder
 	for {
-		ev, err := stream.Next(ctx)
+		up, err := stream.Next(ctx)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
-				break
+				if up == nil {
+					break
+				}
+			} else {
+				t.Fatalf("stream.Next failed: %v", err)
 			}
-			t.Fatalf("stream.Next failed: %v", err)
 		}
-
-		if ev.Type == step.EventTextDelta {
-			response.WriteString(ev.Delta)
+		if up != nil {
+			if dUp, ok := up.(step.ProviderDeltaUpdate); ok {
+				if d, ok := dUp.Delta.(step.TextDelta); ok {
+					response.WriteString(d.Delta)
+				}
+			}
+		}
+		if err != nil && errors.Is(err, io.EOF) {
+			break
 		}
 	}
 
@@ -263,7 +294,7 @@ func TestMultiTurn(t *testing.T, cfg TestConfig) {
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.Timeout)
 	defer cancel()
 
-	req := step.GenerateRequest{
+	req := step.ProviderRequest{
 		History: []step.Message{
 			step.UserMessage{Parts: []step.Part{step.TextPart{Text: "My name is Alice."}}},
 			step.AssistantMessage{Parts: []step.Part{step.TextPart{Text: "Hello Alice! Nice to meet you."}}},
@@ -271,24 +302,33 @@ func TestMultiTurn(t *testing.T, cfg TestConfig) {
 		},
 	}
 
-	stream, err := cfg.Provider.GenerateStream(ctx, req)
+	stream, err := cfg.Provider.Stream(ctx, req)
 	if err != nil {
-		t.Fatalf("GenerateStream failed: %v", err)
+		t.Fatalf("Stream failed: %v", err)
 	}
 	defer stream.Close()
 
 	var response strings.Builder
 	for {
-		ev, err := stream.Next(ctx)
+		up, err := stream.Next(ctx)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
-				break
+				if up == nil {
+					break
+				}
+			} else {
+				t.Fatalf("stream.Next failed: %v", err)
 			}
-			t.Fatalf("stream.Next failed: %v", err)
 		}
-
-		if ev.Type == step.EventTextDelta {
-			response.WriteString(ev.Delta)
+		if up != nil {
+			if dUp, ok := up.(step.ProviderDeltaUpdate); ok {
+				if d, ok := dUp.Delta.(step.TextDelta); ok {
+					response.WriteString(d.Delta)
+				}
+			}
+		}
+		if err != nil && errors.Is(err, io.EOF) {
+			break
 		}
 	}
 

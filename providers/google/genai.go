@@ -2,6 +2,7 @@ package google
 
 import (
 	"context"
+	"errors"
 
 	"github.com/inspirepan/step"
 	"github.com/inspirepan/step/providers/base"
@@ -72,9 +73,9 @@ func WithThinking(budget int) Option {
 	}
 }
 
-// New creates a ChatProvider using Google Generative AI API.
+// New creates a Provider using Google Generative AI API.
 // It reads GEMINI_API_KEY (or GOOGLE_API_KEY) and GEMINI_BASE_URL from environment if not explicitly set.
-func New(model string, opts ...Option) step.ChatProvider {
+func New(model string, opts ...Option) step.Provider {
 	cfg := Config{}
 	for _, opt := range opts {
 		opt(&cfg)
@@ -91,7 +92,8 @@ type provider struct {
 	cfg   Config
 }
 
-func (p *provider) GenerateStream(ctx context.Context, req step.GenerateRequest) (step.AssistantStream, error) {
-	// TODO: implement
-	panic("not implemented")
+func (p *provider) Stream(ctx context.Context, req step.ProviderRequest) (step.ProviderStream, error) {
+	_ = ctx
+	_ = req
+	return nil, errors.New("step/providers/google: not implemented")
 }

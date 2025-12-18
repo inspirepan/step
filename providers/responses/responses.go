@@ -2,6 +2,7 @@ package responses
 
 import (
 	"context"
+	"errors"
 
 	"github.com/inspirepan/step"
 	"github.com/inspirepan/step/providers/base"
@@ -76,9 +77,9 @@ func WithReasoningSummary(summary shared.ReasoningSummary) Option {
 	return func(c *Config) { c.Reasoning.Summary = summary }
 }
 
-// New creates a ChatProvider using OpenAI Responses API.
+// New creates a Provider using OpenAI Responses API.
 // It reads OPENAI_API_KEY and OPENAI_BASE_URL from environment if not explicitly set.
-func New(model string, opts ...Option) step.ChatProvider {
+func New(model string, opts ...Option) step.Provider {
 	cfg := Config{}
 	for _, opt := range opts {
 		opt(&cfg)
@@ -108,7 +109,8 @@ type provider struct {
 	client openai.Client
 }
 
-func (p *provider) GenerateStream(ctx context.Context, req step.GenerateRequest) (step.AssistantStream, error) {
-	// TODO: implement
-	panic("not implemented")
+func (p *provider) Stream(ctx context.Context, req step.ProviderRequest) (step.ProviderStream, error) {
+	_ = ctx
+	_ = req
+	return nil, errors.New("step/providers/responses: not implemented")
 }

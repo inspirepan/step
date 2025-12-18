@@ -32,5 +32,5 @@ type ToolResult struct {
 // Tool is an executable tool.
 type Tool interface {
 	Spec() ToolSpec
-	Execute(ctx context.Context, call ToolCall) (ToolResult, error)
+	Execute(ctx context.Context, call ToolCallPart) (ToolResult, error)
 }
