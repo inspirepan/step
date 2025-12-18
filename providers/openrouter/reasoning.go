@@ -115,6 +115,9 @@ func (h *ReasoningHandler) ConvertThinkingToExtra(parts []step.ThinkingPart, tar
 				if part.Format != "" {
 					encryptedDetail["format"] = part.Format
 				}
+				if part.ID != "" {
+					encryptedDetail["id"] = part.ID
+				}
 				details = append(details, encryptedDetail)
 			}
 		}
@@ -138,6 +141,7 @@ func (h *ReasoningHandler) ExtractThinking(delta map[string]any) (string, bool) 
 	}
 
 	var allText string
+	var isThinking bool
 	for _, item := range reasoningDetails {
 		detail, ok := item.(map[string]any)
 		if !ok {
@@ -145,6 +149,8 @@ func (h *ReasoningHandler) ExtractThinking(delta map[string]any) (string, bool) 
 		}
 
 		detailType, _ := detail["type"].(string)
+
+		isThinking = true
 
 		switch detailType {
 		case "reasoning.text":
@@ -203,6 +209,11 @@ func (h *ReasoningHandler) ExtractThinking(delta map[string]any) (string, bool) 
 				}
 			}
 
+			// Extract fields
+			if id, ok := detail["id"].(string); ok && id != "" {
+				h.currentPart.ID = id
+			}
+
 			if data, ok := detail["data"].(string); ok && data != "" {
 				h.currentPart.Signature = data
 			}
@@ -219,7 +230,7 @@ func (h *ReasoningHandler) ExtractThinking(delta map[string]any) (string, bool) 
 	if allText != "" {
 		return allText, true
 	}
-	return "", false
+	return "", isThinking
 }
 
 // FlushThinking returns accumulated thinking as ThinkingParts.

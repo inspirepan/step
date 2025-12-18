@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"sort"
 	"sync"
 	"time"
 
@@ -11,15 +12,6 @@ import (
 	"github.com/inspirepan/step/providers/base"
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/packages/ssestream"
-)
-
-type streamStage int
-
-const (
-	stageWaiting streamStage = iota
-	stageThinking
-	stageText
-	stageTool
 )
 
 // Stream implements step.ProviderStream for OpenAI Chat Completions API.
@@ -33,7 +25,6 @@ type Stream struct {
 
 	mu sync.Mutex
 
-	stage streamStage
 	done  bool
 	err   error
 
@@ -70,7 +61,6 @@ func NewStream(
 		stream:           stream,
 		debug:            debug,
 		reasoningHandler: handler,
-		stage:            stageWaiting,
 		toolCalls:        make(map[int]*toolCallAccumulator),
 	}
 }
@@ -92,8 +82,15 @@ func (s *Stream) Next(ctx context.Context) (step.ProviderUpdate, error) {
 	for {
 		select {
 		case <-ctx.Done():
-			s.err = ctx.Err()
-			return nil, s.err
+			// If the user cancels mid-stream, finalize a partial message so callers can
+			// still consume a coherent AssistantMessage (then Step will return ctx.Err()).
+			if !s.done {
+				s.finalize()
+				if len(s.pending) > 0 {
+					return s.dequeue()
+				}
+			}
+			return nil, io.EOF
 		default:
 		}
 
@@ -144,7 +141,7 @@ func (s *Stream) dequeue() (step.ProviderUpdate, error) {
 
 func (s *Stream) processChunk(chunk openai.ChatCompletionChunk) {
 	if s.debug != nil {
-		rec := base.NewDebugRecord("chunk", chunk)
+		rec := base.NewDebugRecord("chunk", chunk.RawJSON())
 		rec.Provider = s.providerName
 		rec.Model = s.modelName
 		_ = s.debug.Log(rec)
@@ -173,37 +170,28 @@ func (s *Stream) processChunk(chunk openai.ChatCompletionChunk) {
 		s.stopReason = mapFinishReason(string(choice.FinishReason))
 	}
 
-	// Thinking
+	// Thinking (may be interleaved with text/tool calls in the same chunk)
 	if s.reasoningHandler != nil {
 		deltaMap := deltaToMap(delta)
 		if text, isThinking := s.reasoningHandler.ExtractThinking(deltaMap); isThinking {
-			if s.stage != stageThinking {
-				s.emitStageEnd()
-				s.stage = stageThinking
+			// Some providers (e.g. OpenRouter+Gemini) may emit reasoning.encrypted with no text.
+			if text != "" {
+				s.enqueue(step.ProviderDeltaUpdate{Delta: step.ThinkingDelta{Delta: text}})
 			}
-			s.enqueue(step.ProviderDeltaUpdate{Delta: step.ThinkingDelta{Delta: text}})
-			return
+			// Do not return: the same chunk can also include content/tool_calls.
 		}
 	}
 
-	// Text
+	// Text (may be interleaved with tool calls)
 	if delta.Content != "" {
-		if s.stage != stageText {
-			s.emitStageEnd()
-			s.stage = stageText
-		}
 		s.textContent = append(s.textContent, delta.Content)
 		s.enqueue(step.ProviderDeltaUpdate{Delta: step.TextDelta{Delta: delta.Content}})
-		return
+		// Do not return: the same chunk can also include tool_calls.
 	}
 
 	// Tool calls
 	for _, tc := range delta.ToolCalls {
 		idx := int(tc.Index)
-		if s.stage != stageTool {
-			s.emitStageEnd()
-			s.stage = stageTool
-		}
 		if _, exists := s.toolCalls[idx]; !exists {
 			s.toolCalls[idx] = &toolCallAccumulator{}
 		}
@@ -228,17 +216,35 @@ func (s *Stream) finalize() {
 		s.stopReason = step.StopStop
 	}
 
-	s.emitStageEnd()
-
-	for _, acc := range s.toolCalls {
-		if acc.id == "" || acc.name == "" {
-			continue
+	// Fixed final assembly order:
+	// 1) thinking parts (always included if present)
+	// 2) user-visible content parts (text today; future: text+image order)
+	// 3) tool calls
+	if thinkingParts := s.reasoningHandler.FlushThinking(); len(thinkingParts) > 0 {
+		for _, part := range thinkingParts {
+			s.parts = append(s.parts, part)
 		}
-		s.parts = append(s.parts, step.ToolCallPart{
-			CallID:   acc.id,
-			Name:     acc.name,
-			ArgsJSON: json.RawMessage(acc.argsStr),
-		})
+	}
+	// Text
+	s.flushText()
+	// Tool calls (stable by tool index)
+	if len(s.toolCalls) > 0 {
+		idxs := make([]int, 0, len(s.toolCalls))
+		for idx := range s.toolCalls {
+			idxs = append(idxs, idx)
+		}
+		sort.Ints(idxs)
+		for _, idx := range idxs {
+			acc := s.toolCalls[idx]
+			if acc == nil || acc.id == "" || acc.name == "" {
+				continue
+			}
+			s.parts = append(s.parts, step.ToolCallPart{
+				CallID:   acc.id,
+				Name:     acc.name,
+				ArgsJSON: json.RawMessage(acc.argsStr),
+			})
+		}
 	}
 
 	msg := step.AssistantMessage{
@@ -248,19 +254,6 @@ func (s *Stream) finalize() {
 		StopReason: s.stopReason,
 	}
 	s.enqueue(step.ProviderMessageUpdate{Message: msg})
-}
-
-func (s *Stream) emitStageEnd() {
-	switch s.stage {
-	case stageThinking:
-		if thinkingParts := s.reasoningHandler.FlushThinking(); len(thinkingParts) > 0 {
-			for _, part := range thinkingParts {
-				s.parts = append(s.parts, part)
-			}
-		}
-	case stageText:
-		s.flushText()
-	}
 }
 
 func (s *Stream) flushText() {
@@ -289,9 +282,8 @@ func mapFinishReason(reason string) step.StopReason {
 }
 
 func deltaToMap(delta openai.ChatCompletionChunkChoiceDelta) map[string]any {
-	data, _ := json.Marshal(delta)
 	var m map[string]any
-	_ = json.Unmarshal(data, &m)
+	_ = json.Unmarshal([]byte(delta.RawJSON()), &m)
 	return m
 }
 
